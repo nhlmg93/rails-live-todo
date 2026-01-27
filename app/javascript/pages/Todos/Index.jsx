@@ -1,77 +1,28 @@
-import { useState, useRef } from 'react'
-import { useAtom } from 'jotai'
-import { useTodoSync } from '../../hooks/useTodoSync'
-import { todoCountAtom, completedCountAtom } from '../../atoms/todos'
+import { useRef } from 'react'
+import { useTodoActions } from '../../hooks/useTodoActions'
 import { EventLog } from '../../components/EventLog'
 import { LeaderBadge } from '../../components/LeaderBadge'
 import './Index.css'
 
-export default function Index({ todos: initialTodos }) {
-  const { todos } = useTodoSync(initialTodos)
-  const [todoCount] = useAtom(todoCountAtom)
-  const [completedCount] = useAtom(completedCountAtom)
-  const [newTitle, setNewTitle] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const inputRef = useRef(null)
+export default function Index() {
+  const { todos, todoCount, completedCount, createTodo, toggleTodo, deleteTodo } = useTodoActions()
+  const formRef = useRef(null)
 
-  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
-
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
-    if (!newTitle.trim() || isSubmitting) return
+    const formData = new FormData(e.target)
+    const title = formData.get('title')?.trim()
+    if (!title) return
 
-    setIsSubmitting(true)
-    try {
-      const response = await fetch('/todos', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfToken,
-        },
-        body: JSON.stringify({ todo: { title: newTitle.trim() } }),
-      })
-
-      if (response.ok) {
-        setNewTitle('')
-        inputRef.current?.focus()
-      }
-    } catch (error) {
-      console.error('Failed to create todo:', error)
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  const handleToggle = async (todo) => {
-    try {
-      await fetch(`/todos/${todo.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfToken,
-        },
-        body: JSON.stringify({ todo: { completed: !todo.completed } }),
-      })
-    } catch (error) {
-      console.error('Failed to update todo:', error)
-    }
-  }
-
-  const handleDelete = async (todoId) => {
-    try {
-      await fetch(`/todos/${todoId}`, {
-        method: 'DELETE',
-        headers: { 'X-CSRF-Token': csrfToken },
-      })
-    } catch (error) {
-      console.error('Failed to delete todo:', error)
-    }
+    createTodo(title)
+    formRef.current?.reset()
+    formRef.current?.querySelector('input')?.focus()
   }
 
   return (
     <div className="todos-container">
       <LeaderBadge />
-      
+
       <h1 className="todos-title">Todos</h1>
 
       <div className="todos-stats">
@@ -89,18 +40,15 @@ export default function Index({ todos: initialTodos }) {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="todos-form">
+      <form ref={formRef} onSubmit={handleSubmit} className="todos-form">
         <input
-          ref={inputRef}
           type="text"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
+          name="title"
           placeholder="What needs to be done?"
           className="todos-input"
-          disabled={isSubmitting}
         />
-        <button type="submit" className="todos-add-button" disabled={isSubmitting}>
-          {isSubmitting ? '...' : 'Add'}
+        <button type="submit" className="todos-add-button">
+          Add
         </button>
       </form>
 
@@ -111,7 +59,7 @@ export default function Index({ todos: initialTodos }) {
               <input
                 type="checkbox"
                 checked={todo.completed}
-                onChange={() => handleToggle(todo)}
+                onChange={() => toggleTodo(todo)}
                 className="todos-checkbox"
               />
               <span className={`todos-text ${todo.completed ? 'todos-text--completed' : ''}`}>
@@ -119,7 +67,7 @@ export default function Index({ todos: initialTodos }) {
               </span>
             </label>
             <button
-              onClick={() => handleDelete(todo.id)}
+              onClick={() => deleteTodo(todo.id)}
               className="todos-delete-button"
               aria-label="Delete todo"
             >

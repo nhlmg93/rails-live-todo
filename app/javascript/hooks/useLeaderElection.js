@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import { isLeaderAtom } from '../atoms/todos'
-import { addLogAtom } from '../atoms/logs'
+import { useLogWriter } from './useEventLog'
 
 const TAB_ID = crypto.randomUUID().slice(0, 8)
 const HEARTBEAT_MS = 2000
@@ -13,7 +13,7 @@ const TIMEOUT_MS = 5000
  */
 export function useLeaderElection(channelName, { onMessage } = {}) {
   const [isLeader, setIsLeader] = useAtom(isLeaderAtom)
-  const addLog = useSetAtom(addLogAtom)
+  const addLog = useLogWriter()
   const channelRef = useRef(null)
   const heartbeatRef = useRef(null)
   const timeoutRef = useRef(null)
@@ -38,7 +38,7 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
       clearTimeout(timeoutRef.current)
       heartbeatRef.current = setInterval(() => send('ping'), HEARTBEAT_MS)
       send('ping')
-      addLog({ category: 'leader', message: 'Became leader' })
+      addLog('leader', 'Became leader')
     }
 
     const becomeFollower = () => {
@@ -46,7 +46,7 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
       isLeaderRef.current = false
       setIsLeader(false)
       clearInterval(heartbeatRef.current)
-      addLog({ category: 'follower', message: 'Became follower (another tab has lower ID)' })
+      addLog('follower', 'Became follower (another tab has lower ID)')
     }
 
     const resetTimeout = () => {
@@ -63,14 +63,14 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
         resetTimeout()
       } else if (type === 'discover' && isLeaderRef.current) {
         send('ping')
-        addLog({ category: 'broadcast', message: `Responded to discover from ${from}` })
+        addLog('broadcast', `Responded to discover from ${from}`)
       } else if (type === 'data' && !isLeaderRef.current && onMessage) {
-        addLog({ category: 'broadcast', message: 'Received data from leader' })
+        addLog('broadcast', 'Received data from leader')
         onMessage(payload)
       }
     }
 
-    addLog({ category: 'broadcast', message: `Joining channel "${channelName}"` })
+    addLog('broadcast', `Joining channel "${channelName}"`)
     send('discover')
     setTimeout(() => {
       if (!isLeaderRef.current && !timeoutRef.current) becomeLeader()

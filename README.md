@@ -21,8 +21,8 @@ A real-time collaborative Todo application built with Rails 8.1 and React 19, fe
 
 ### Frontend
 - React 19
-- Inertia.js
-- Jotai (state management)
+- Inertia.js (routing, mutations, state)
+- Jotai (client-side state only: leader election, event log)
 - Vite (build tooling)
 
 ## System Dependencies
@@ -121,9 +121,9 @@ In production, SQLite databases are stored in `storage/`:
 |--------|------|-------------|----------|
 | `GET` | `/` | Render todos page | Inertia page |
 | `GET` | `/todos` | List all todos | Inertia page |
-| `POST` | `/todos` | Create a todo | JSON |
-| `PATCH` | `/todos/:id` | Update a todo | JSON |
-| `DELETE` | `/todos/:id` | Delete a todo | 204 No Content |
+| `POST` | `/todos` | Create a todo | Redirect (Inertia) |
+| `PATCH` | `/todos/:id` | Update a todo | Redirect (Inertia) |
+| `DELETE` | `/todos/:id` | Delete a todo | Redirect (Inertia) |
 | `GET` | `/up` | Health check | 200 OK |
 
 ## Testing
@@ -181,6 +181,15 @@ Database-backed caching with SQLite:
 
 ## Architecture
 
+### Inertia.js Integration
+
+The app uses Inertia.js as the bridge between Rails and React:
+
+- **Server data**: `usePage().props.todos` - Inertia manages server-rendered props
+- **Mutations**: `router.post/patch/delete` - Inertia handles CSRF, redirects, and prop updates
+- **Real-time sync**: ActionCable updates call `router.replace()` to update Inertia props
+- **Loading states**: Built-in NProgress indicator (250ms delay, indigo color)
+
 ### Leader Election Pattern
 
 To reduce server load, only one browser tab (the "leader") maintains a WebSocket connection:
@@ -189,23 +198,40 @@ To reduce server load, only one browser tab (the "leader") maintains a WebSocket
 2. Leader sends heartbeat every 2 seconds
 3. Follower becomes leader after 5 seconds of no heartbeat
 4. Lower tab ID wins conflicts
-5. Followers receive data broadcasts from the leader
+5. Leader receives ActionCable updates and relays to followers via BroadcastChannel
+
+### State Architecture
+
+```
+Inertia (server data)              Jotai (client-only)
+├── usePage().props.todos          ├── isLeaderAtom (tab coordination)
+├── router.post/patch/delete       └── eventLogAtom (debug logging)
+└── router.replace() 
+         ^
+         |
+    ActionCable + BroadcastChannel
+    (leader receives, relays to followers)
+```
 
 ### Frontend Structure
 
 ```
 app/javascript/
-├── atoms/          # Jotai state atoms
+├── atoms/          # Jotai atoms (isLeader, eventLog - client-only)
 ├── channels/       # ActionCable consumer
-├── components/     # React components
+├── components/     # React components (EventLog, LeaderBadge)
 ├── entrypoints/    # Vite entry points
 ├── hooks/          # Custom React hooks
+│   ├── useTodoActions.js    # Todo state + sync via Inertia
+│   ├── useLeaderElection.js # Tab leader election
+│   └── useEventLog.js       # Event logging utilities
 └── pages/          # Inertia pages
 ```
 
 **Key Hooks:**
-- `useTodoSync.js` - Manages todo synchronization
-- `useLeaderElection.js` - Leader election across tabs
+- `useTodoActions.js` - Todo state via `usePage()`, mutations via `router`, real-time sync via ActionCable
+- `useLeaderElection.js` - Leader election across tabs via BroadcastChannel
+- `useEventLog.js` - Event logging with `useEventLog()` and `useLogWriter()` hooks
 
 ## CI/CD
 

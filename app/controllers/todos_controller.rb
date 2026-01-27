@@ -11,9 +11,9 @@ class TodosController < ApplicationController
     todo = Todo.new(todo_params)
     if todo.save
       broadcast_update_async
-      render json: todo.as_json(only: %i[id title completed created_at]), status: :created
+      redirect_to todos_path
     else
-      render json: { errors: todo.errors.full_messages }, status: :unprocessable_entity
+      redirect_to todos_path, inertia: { errors: todo.errors.full_messages }
     end
   end
 
@@ -21,16 +21,16 @@ class TodosController < ApplicationController
     todo = Todo.find(params[:id])
     if todo.update(todo_params)
       broadcast_update_async
-      render json: todo.as_json(only: %i[id title completed created_at])
+      redirect_to todos_path
     else
-      render json: { errors: todo.errors.full_messages }, status: :unprocessable_entity
+      redirect_to todos_path, inertia: { errors: todo.errors.full_messages }
     end
   end
 
   def destroy
     Todo.find(params[:id]).destroy
     broadcast_update_async
-    head :no_content
+    redirect_to todos_path
   end
 
   private

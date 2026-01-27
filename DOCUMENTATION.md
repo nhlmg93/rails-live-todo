@@ -36,7 +36,7 @@ This document provides a comprehensive guide to the real-time synchronization fe
 │                         RAILS SERVER                                 │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐   │
 │  │ TodosChannel │◀───│ Solid Queue  │◀───│ TodosController      │   │
-│  │              │    │ (async jobs) │    │ (CRUD operations)    │   │
+│  │              │    │ (async jobs) │    │ (Inertia redirects)  │   │
 │  └──────────────┘    └──────────────┘    └──────────────────────┘   │
 │         │                   │                      │                │
 │         ▼                   ▼                      ▼                │
@@ -56,12 +56,34 @@ This document provides a comprehensive guide to the real-time synchronization fe
 
 | Component | Role |
 |-----------|------|
+| **Inertia.js** | Handles routing, mutations (`router.post/patch/delete`), and server props (`usePage()`) |
 | **Leader Tab** | Maintains WebSocket connection, receives server updates, relays to followers |
 | **Follower Tabs** | Receive updates via BroadcastChannel (no WebSocket overhead) |
 | **TodosChannel** | ActionCable channel that broadcasts todo updates |
 | **BroadcastTodosJob** | Background job that fetches and broadcasts data |
 | **Rails Cache** | Caches `Todo.broadcast_list` to avoid repeated DB queries |
 | **Solid Queue** | SQLite-backed job queue for async processing |
+
+### State Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      STATE MANAGEMENT                                │
+│                                                                      │
+│  ┌─────────────────────────────┐  ┌──────────────────────────────┐  │
+│  │     INERTIA (Server Data)   │  │    JOTAI (Client-Only)       │  │
+│  │                             │  │                              │  │
+│  │  usePage().props.todos      │  │  isLeaderAtom                │  │
+│  │  router.post/patch/delete   │  │  eventLogAtom                │  │
+│  │  router.replace()           │  │                              │  │
+│  └─────────────────────────────┘  └──────────────────────────────┘  │
+│                │                               │                     │
+│                └───────────────┬───────────────┘                     │
+│                                │                                     │
+│                        useTodoActions()                              │
+│                  (combines both for unified API)                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -90,6 +112,16 @@ The system uses the [BroadcastChannel API](https://developer.mozilla.org/en-US/d
 Without leader election, each browser tab would open its own WebSocket connection:
 - 5 tabs = 5 WebSocket connections = 5x server resources
 - With leader election: 5 tabs = 1 WebSocket connection
+
+### Inertia.js Integration
+
+Inertia.js serves as the primary data layer for server communication:
+
+1. **Initial Data**: Server renders page with `props: { todos: [...] }`
+2. **Reading Data**: `usePage().props.todos` accesses current todos
+3. **Mutations**: `router.post/patch/delete` sends requests, handles CSRF automatically
+4. **Redirects**: Controller redirects back, Inertia fetches fresh props
+5. **Real-time Updates**: ActionCable updates call `router.replace()` to update props without navigation
 
 ---
 
@@ -175,7 +207,7 @@ end
 - Streams from the `"todos"` broadcast channel
 - Immediately transmits current data on subscribe (no waiting for first update)
 
-### 4. Controller with Broadcast Triggering
+### 4. Controller with Inertia Redirects
 
 **File:** `app/controllers/todos_controller.rb`
 
@@ -190,10 +222,10 @@ class TodosController < ApplicationController
   def create
     todo = Todo.new(todo_params)
     if todo.save
-      broadcast_update_async  # Queue background job
-      render json: todo.as_json(only: %i[id title completed created_at]), status: :created
+      broadcast_update_async
+      redirect_to todos_path
     else
-      render json: { errors: todo.errors.full_messages }, status: :unprocessable_entity
+      redirect_to todos_path, inertia: { errors: todo.errors.full_messages }
     end
   end
 
@@ -201,16 +233,16 @@ class TodosController < ApplicationController
     todo = Todo.find(params[:id])
     if todo.update(todo_params)
       broadcast_update_async
-      render json: todo.as_json(only: %i[id title completed created_at])
+      redirect_to todos_path
     else
-      render json: { errors: todo.errors.full_messages }, status: :unprocessable_entity
+      redirect_to todos_path, inertia: { errors: todo.errors.full_messages }
     end
   end
 
   def destroy
     Todo.find(params[:id]).destroy
     broadcast_update_async
-    head :no_content
+    redirect_to todos_path
   end
 
   private
@@ -227,73 +259,107 @@ end
 
 **Key Points:**
 - `index` renders Inertia page with cached todos (server-side rendering)
-- CRUD actions call `broadcast_update_async` to queue the broadcast job
-- HTTP response returns immediately; WebSocket update follows asynchronously
+- CRUD actions redirect back to `todos_path` (standard Inertia pattern)
+- Inertia follows redirect and fetches fresh props automatically
+- `broadcast_update_async` queues job for real-time sync to other tabs/users
 
 ---
 
 ## Frontend Implementation
 
-### 1. Jotai State Atoms
+### 1. Jotai State Atoms (Client-Only)
 
 **File:** `app/javascript/atoms/todos.js`
 
 ```javascript
 import { atom } from 'jotai'
 
-// Core state
-export const todosAtom = atom([])
+// Leader election state (client-side tab coordination only)
 export const isLeaderAtom = atom(false)
-
-// Derived state (computed automatically)
-export const todoCountAtom = atom((get) => get(todosAtom).length)
-export const completedCountAtom = atom((get) => 
-  get(todosAtom).filter(todo => todo.completed).length
-)
 ```
 
-**File:** `app/javascript/atoms/logs.js`
+**Note:** Todos are managed by Inertia, not Jotai. Only client-side concerns (leader election, event logging) use Jotai.
+
+### 2. Event Log Hook
+
+**File:** `app/javascript/hooks/useEventLog.js`
 
 ```javascript
+import { useCallback } from 'react'
+import { useAtom, useSetAtom } from 'jotai'
 import { atom } from 'jotai'
 
 const MAX_LOGS = 50
 
+// Core logs atom
 export const logsAtom = atom([])
 
-// Write-only atom for adding log entries
-export const addLogAtom = atom(
-  null,
-  (get, set, { category, message }) => {
+/**
+ * Hook for managing event logs.
+ * Returns utilities for adding, clearing, and reading logs.
+ */
+export function useEventLog() {
+  const [logs, setLogs] = useAtom(logsAtom)
+
+  const addLog = useCallback((category, message) => {
     const entry = {
       id: Date.now() + Math.random(),
-      time: new Date().toLocaleTimeString('en-US', { 
-        hour12: false, 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        second: '2-digit', 
-        fractionalSecondDigits: 3 
+      time: new Date().toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        fractionalSecondDigits: 3,
       }),
       category,
       message,
     }
-    const currentLogs = get(logsAtom)
-    set(logsAtom, [entry, ...currentLogs].slice(0, MAX_LOGS))
-  }
-)
+    setLogs((currentLogs) => [entry, ...currentLogs].slice(0, MAX_LOGS))
+  }, [setLogs])
 
-export const clearLogsAtom = atom(null, (_get, set) => set(logsAtom, []))
+  const clearLogs = useCallback(() => {
+    setLogs([])
+  }, [setLogs])
+
+  return { logs, addLog, clearLogs }
+}
+
+/**
+ * Lightweight hook that only provides the addLog function.
+ * Use this in hooks/components that only need to write logs.
+ */
+export function useLogWriter() {
+  const setLogs = useSetAtom(logsAtom)
+
+  const addLog = useCallback((category, message) => {
+    const entry = {
+      id: Date.now() + Math.random(),
+      time: new Date().toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        fractionalSecondDigits: 3,
+      }),
+      category,
+      message,
+    }
+    setLogs((currentLogs) => [entry, ...currentLogs].slice(0, MAX_LOGS))
+  }, [setLogs])
+
+  return addLog
+}
 ```
 
-### 2. Leader Election Hook
+### 3. Leader Election Hook
 
 **File:** `app/javascript/hooks/useLeaderElection.js`
 
 ```javascript
 import { useEffect, useRef, useCallback } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import { isLeaderAtom } from '../atoms/todos'
-import { addLogAtom } from '../atoms/logs'
+import { useLogWriter } from './useEventLog'
 
 const TAB_ID = crypto.randomUUID().slice(0, 8)
 const HEARTBEAT_MS = 2000
@@ -301,7 +367,7 @@ const TIMEOUT_MS = 5000
 
 export function useLeaderElection(channelName, { onMessage } = {}) {
   const [isLeader, setIsLeader] = useAtom(isLeaderAtom)
-  const addLog = useSetAtom(addLogAtom)
+  const addLog = useLogWriter()
   const channelRef = useRef(null)
   const heartbeatRef = useRef(null)
   const timeoutRef = useRef(null)
@@ -327,7 +393,7 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
       clearTimeout(timeoutRef.current)
       heartbeatRef.current = setInterval(() => send('ping'), HEARTBEAT_MS)
       send('ping')
-      addLog({ category: 'leader', message: 'Became leader' })
+      addLog('leader', 'Became leader')
     }
 
     const becomeFollower = () => {
@@ -335,7 +401,7 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
       isLeaderRef.current = false
       setIsLeader(false)
       clearInterval(heartbeatRef.current)
-      addLog({ category: 'follower', message: 'Became follower' })
+      addLog('follower', 'Became follower (another tab has lower ID)')
     }
 
     const resetTimeout = () => {
@@ -354,11 +420,14 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
         resetTimeout()
       } else if (type === 'discover' && isLeaderRef.current) {
         send('ping')  // Respond to new tabs
+        addLog('broadcast', `Responded to discover from ${from}`)
       } else if (type === 'data' && !isLeaderRef.current && onMessage) {
+        addLog('broadcast', 'Received data from leader')
         onMessage(payload)  // Follower receives data
       }
     }
 
+    addLog('broadcast', `Joining channel "${channelName}"`)
     send('discover')  // Ask if leader exists
     setTimeout(() => {
       if (!isLeaderRef.current && !timeoutRef.current) becomeLeader()
@@ -375,39 +444,73 @@ export function useLeaderElection(channelName, { onMessage } = {}) {
 }
 ```
 
-### 3. Todo Sync Hook (Main Orchestration)
+### 4. Unified Todo Actions Hook (Inertia + ActionCable)
 
-**File:** `app/javascript/hooks/useTodoSync.js`
+**File:** `app/javascript/hooks/useTodoActions.js`
+
+This hook combines Inertia for server data/mutations with ActionCable for real-time sync:
 
 ```javascript
-import { useEffect, useRef, useCallback } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useEffect, useRef, useCallback, useMemo, useEffectEvent } from 'react'
+import { useAtom } from 'jotai'
+import { router, usePage } from '@inertiajs/react'
 import consumer from '../channels/consumer'
 import { useLeaderElection } from './useLeaderElection'
-import { todosAtom, isLeaderAtom } from '../atoms/todos'
-import { addLogAtom } from '../atoms/logs'
+import { isLeaderAtom } from '../atoms/todos'
+import { useLogWriter } from './useEventLog'
 
-export function useTodoSync(initialTodos) {
-  const [todos, setTodos] = useAtom(todosAtom)
+/**
+ * Update Inertia page props with new todos (used by ActionCable and BroadcastChannel)
+ */
+const updateTodos = (todos) => {
+  router.replace({
+    preserveScroll: true,
+    preserveState: true,
+    props: (current) => ({ ...current, todos }),
+  })
+}
+
+/**
+ * Unified hook for todo state and actions.
+ * Handles syncing across browser tabs via ActionCable + leader election,
+ * and provides CRUD actions via Inertia router.
+ */
+export function useTodoActions() {
+  const { todos } = usePage().props
   const [isLeader] = useAtom(isLeaderAtom)
-  const addLog = useSetAtom(addLogAtom)
+  const addLog = useLogWriter()
   const subscriptionRef = useRef(null)
-  const initializedRef = useRef(false)
 
-  // Initialize from server-rendered props (once)
-  useEffect(() => {
-    if (!initializedRef.current && initialTodos?.length > 0) {
-      setTodos(initialTodos)
-      initializedRef.current = true
-    }
-  }, [initialTodos, setTodos])
+  // Derived counts
+  const todoCount = useMemo(() => todos?.length ?? 0, [todos])
+  const completedCount = useMemo(
+    () => todos?.filter((todo) => todo.completed).length ?? 0,
+    [todos]
+  )
 
-  // Leader election with data relay callback
   const { broadcast } = useLeaderElection('todos-sync', {
-    onMessage: useCallback((data) => setTodos(data), [setTodos])
+    onMessage: useCallback((data) => updateTodos(data), []),
   })
 
-  // Leader-only WebSocket subscription
+  // Effect Events for ActionCable callbacks (non-reactive)
+  const onConnected = useEffectEvent(() => {
+    addLog('cable', 'Connected to TodosChannel')
+  })
+
+  const onDisconnected = useEffectEvent(() => {
+    addLog('cable', 'Disconnected from TodosChannel')
+  })
+
+  const onReceived = useEffectEvent((data) => {
+    if (data.todos) {
+      addLog('cable', `Received ${data.todos.length} todos`)
+      updateTodos(data.todos)
+      broadcast(data.todos)
+      addLog('broadcast', 'Relayed todos to followers')
+    }
+  })
+
+  // ActionCable subscription (leader only)
   useEffect(() => {
     if (!isLeader) {
       subscriptionRef.current?.unsubscribe()
@@ -415,82 +518,172 @@ export function useTodoSync(initialTodos) {
       return
     }
 
-    subscriptionRef.current = consumer.subscriptions.create("TodosChannel", {
-      connected() {
-        addLog({ category: 'cable', message: 'Connected to TodosChannel' })
-      },
-      disconnected() {
-        addLog({ category: 'cable', message: 'Disconnected from TodosChannel' })
-      },
-      received(data) {
-        if (data.todos) {
-          addLog({ category: 'cable', message: `Received ${data.todos.length} todos` })
-          setTodos(data.todos)
-          broadcast(data.todos)  // Relay to followers
-          addLog({ category: 'broadcast', message: 'Relayed todos to followers' })
-        }
-      }
+    subscriptionRef.current = consumer.subscriptions.create('TodosChannel', {
+      connected: onConnected,
+      disconnected: onDisconnected,
+      received: onReceived,
     })
 
     return () => subscriptionRef.current?.unsubscribe()
-  }, [isLeader, broadcast, setTodos, addLog])
+  }, [isLeader])
 
-  return { todos, isLeader }
+  // Action creators - use Inertia router directly
+  const createTodo = useCallback((title) => {
+    router.post('/todos', { todo: { title: title.trim() } }, { preserveScroll: true })
+  }, [])
+
+  const toggleTodo = useCallback((todo) => {
+    router.patch(
+      `/todos/${todo.id}`,
+      { todo: { completed: !todo.completed } },
+      { preserveScroll: true }
+    )
+  }, [])
+
+  const deleteTodo = useCallback((todoId) => {
+    router.delete(`/todos/${todoId}`, { preserveScroll: true })
+  }, [])
+
+  return {
+    todos: todos ?? [],
+    todoCount,
+    completedCount,
+    isLeader,
+    createTodo,
+    toggleTodo,
+    deleteTodo,
+  }
 }
 ```
 
-### 4. Page Component Usage
+**Key Points:**
+- `usePage().props.todos` - Reads todos from Inertia (server-rendered)
+- `router.post/patch/delete` - Sends mutations via Inertia (CSRF automatic)
+- `router.replace()` - Updates Inertia props when ActionCable receives data
+- Counts computed with `useMemo` instead of separate Jotai atoms
+
+### 5. Page Component Usage
 
 **File:** `app/javascript/pages/Todos/Index.jsx`
 
 ```javascript
-import { useState, useRef } from 'react'
-import { useAtom } from 'jotai'
-import { useTodoSync } from '../../hooks/useTodoSync'
-import { todoCountAtom, completedCountAtom } from '../../atoms/todos'
+import { useRef } from 'react'
+import { useTodoActions } from '../../hooks/useTodoActions'
+import { EventLog } from '../../components/EventLog'
+import { LeaderBadge } from '../../components/LeaderBadge'
 
-export default function Index({ todos: initialTodos }) {
-  // Initialize sync with server-rendered data
-  const { todos } = useTodoSync(initialTodos)
-  const [todoCount] = useAtom(todoCountAtom)
-  const [completedCount] = useAtom(completedCountAtom)
-  
-  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
+export default function Index() {
+  const { todos, todoCount, completedCount, createTodo, toggleTodo, deleteTodo } = useTodoActions()
+  const formRef = useRef(null)
 
-  const handleCreate = async (title) => {
-    await fetch('/todos', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfToken,
-      },
-      body: JSON.stringify({ todo: { title } }),
-    })
-    // UI updates via WebSocket, not from this response
-  }
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    const formData = new FormData(e.target)
+    const title = formData.get('title')?.trim()
+    if (!title) return
 
-  const handleToggle = async (todo) => {
-    await fetch(`/todos/${todo.id}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfToken,
-      },
-      body: JSON.stringify({ todo: { completed: !todo.completed } }),
-    })
-  }
-
-  const handleDelete = async (id) => {
-    await fetch(`/todos/${id}`, {
-      method: 'DELETE',
-      headers: { 'X-CSRF-Token': csrfToken },
-    })
+    createTodo(title)
+    formRef.current?.reset()
+    formRef.current?.querySelector('input')?.focus()
   }
 
   return (
-    <div>
-      <h1>Todos ({todoCount} total, {completedCount} done)</h1>
-      {/* Form and list rendering... */}
+    <div className="todos-container">
+      <LeaderBadge />
+      <h1>Todos</h1>
+      <p>{completedCount} of {todoCount} completed</p>
+      
+      <form ref={formRef} onSubmit={handleSubmit}>
+        <input type="text" name="title" placeholder="What needs to be done?" />
+        <button type="submit">Add</button>
+      </form>
+      
+      <ul>
+        {todos.map((todo) => (
+          <li key={todo.id}>
+            <input
+              type="checkbox"
+              checked={todo.completed}
+              onChange={() => toggleTodo(todo)}
+            />
+            <span>{todo.title}</span>
+            <button onClick={() => deleteTodo(todo.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+      
+      <EventLog />
+    </div>
+  )
+}
+```
+
+**Key Points:**
+- No `initialTodos` prop needed - `useTodoActions()` reads from `usePage().props`
+- Simple form handling - no `useActionState` or `useTransition` needed
+- Inertia's NProgress handles loading indicators automatically
+
+### 6. Inertia App Setup
+
+**File:** `app/javascript/entrypoints/inertia.jsx`
+
+```javascript
+import { createInertiaApp } from '@inertiajs/react'
+import { createRoot } from 'react-dom/client'
+
+createInertiaApp({
+  progress: {
+    delay: 250,        // Show after 250ms (avoids flicker on fast requests)
+    color: '#4f46e5',  // Indigo color
+    includeCSS: true,  // Include NProgress styles
+    showSpinner: false,
+  },
+  resolve: name => {
+    const pages = import.meta.glob('../pages/**/*.jsx', { eager: true })
+    return pages[`../pages/${name}.jsx`]
+  },
+  setup({ el, App, props }) {
+    createRoot(el).render(<App {...props} />)
+  },
+})
+```
+
+### 7. Event Log Component
+
+**File:** `app/javascript/components/EventLog.jsx`
+
+```javascript
+import { useState } from 'react'
+import { useEventLog } from '../hooks/useEventLog'
+
+export function EventLog() {
+  const { logs, clearLogs } = useEventLog()
+  const [isCollapsed, setIsCollapsed] = useState(false)
+
+  if (isCollapsed) {
+    return (
+      <button onClick={() => setIsCollapsed(false)}>
+        Show Logs ({logs.length})
+      </button>
+    )
+  }
+
+  return (
+    <div className="event-log">
+      <div className="event-log__header">
+        <span>Event Log</span>
+        <button onClick={() => clearLogs()}>Clear</button>
+        <button onClick={() => setIsCollapsed(true)}>Hide</button>
+      </div>
+      <div className="event-log__list">
+        {logs.map((entry) => (
+          <div key={entry.id} className="event-log__entry">
+            <span>{entry.time}</span>
+            <span>[{entry.category}]</span>
+            <span>{entry.message}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -508,39 +701,42 @@ export default function Index({ todos: initialTodos }) {
    └─ Calls Todo.broadcast_list (cache miss → queries DB → caches result)
    └─ Renders Inertia page with props: { todos: [...] }
 3. Browser receives HTML with embedded JSON props
-4. React hydrates, useTodoSync initializes Jotai state
+4. React hydrates, useTodoActions reads usePage().props.todos
 5. useLeaderElection sends 'discover' via BroadcastChannel
 6. No response in 500ms → tab becomes LEADER
 7. Leader subscribes to TodosChannel via ActionCable
 8. TodosChannel#subscribed transmits cached todos immediately
 ```
 
-### Example 2: Creating a Todo
+### Example 2: Creating a Todo (Inertia Flow)
 
 ```
 Timeline:
 ─────────────────────────────────────────────────────────────────────
   0ms   User clicks "Add"
-        └─ fetch POST /todos { title: "Buy milk" }
+        └─ router.post('/todos', { todo: { title: "Buy milk" } })
+        └─ Inertia shows NProgress bar (after 250ms delay)
         
  10ms   Rails receives request
         └─ Todo.create! triggers after_commit
         └─ Cache invalidated (Rails.cache.delete)
         └─ BroadcastTodosJob.perform_later enqueued
-        └─ HTTP 201 response sent
+        └─ redirect_to todos_path
         
- 15ms   Browser receives 201 (UI unchanged, waiting for WebSocket)
+ 15ms   Inertia follows redirect
+        └─ GET /todos fetches fresh props
+        └─ UI updates with new todo (current tab)
 
 100ms   Solid Queue picks up job
         └─ Todo.broadcast_list (cache miss → queries DB → caches)
         └─ ActionCable.server.broadcast("todos", { todos: [...] })
 
 105ms   Leader tab receives WebSocket message
-        └─ Jotai state updated
+        └─ router.replace() updates Inertia props
         └─ BroadcastChannel.postMessage({ type: 'data', payload: [...] })
 
 106ms   Follower tabs receive BroadcastChannel message
-        └─ Jotai state updated
+        └─ router.replace() updates their Inertia props
 
 110ms   ALL TABS show updated UI simultaneously
 ─────────────────────────────────────────────────────────────────────
@@ -895,7 +1091,7 @@ production:
 | File | Purpose |
 |------|---------|
 | `app/models/todo.rb` | Todo model with caching (`broadcast_list`, `after_commit`) |
-| `app/controllers/todos_controller.rb` | CRUD operations, triggers async broadcasts |
+| `app/controllers/todos_controller.rb` | CRUD with Inertia redirects, triggers async broadcasts |
 | `app/channels/todos_channel.rb` | ActionCable channel for WebSocket subscriptions |
 | `app/jobs/broadcast_todos_job.rb` | Background job that broadcasts to all subscribers |
 | `config/cable.yml` | ActionCable adapter configuration |
@@ -909,11 +1105,12 @@ production:
 
 | File | Purpose |
 |------|---------|
-| `app/javascript/atoms/todos.js` | Jotai atoms: `todosAtom`, `isLeaderAtom`, derived counts |
-| `app/javascript/atoms/logs.js` | Event logging atoms for debugging |
-| `app/javascript/hooks/useTodoSync.js` | Main orchestration hook combining ActionCable + leader election |
+| `app/javascript/atoms/todos.js` | Jotai atom: `isLeaderAtom` (client-side only) |
+| `app/javascript/hooks/useTodoActions.js` | Todo state via Inertia, sync via ActionCable, CRUD via router |
 | `app/javascript/hooks/useLeaderElection.js` | Tab leader election via BroadcastChannel |
+| `app/javascript/hooks/useEventLog.js` | Event logging hooks: `useEventLog()`, `useLogWriter()` |
 | `app/javascript/channels/consumer.js` | ActionCable consumer singleton |
+| `app/javascript/entrypoints/inertia.jsx` | Inertia app setup with NProgress config |
 | `app/javascript/pages/Todos/Index.jsx` | Main todo page component |
 | `app/javascript/components/LeaderBadge.jsx` | Visual leader/follower indicator |
 | `app/javascript/components/EventLog.jsx` | Debug panel showing real-time events |
@@ -921,46 +1118,102 @@ production:
 ### Frontend State Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        JOTAI ATOMS                          │
-│  ┌──────────────┐   ┌──────────────┐   ┌────────────────┐  │
-│  │  todosAtom   │   │ isLeaderAtom │   │    logsAtom    │  │
-│  │    [...]     │   │    boolean   │   │     [...]      │  │
-│  └──────┬───────┘   └──────────────┘   └────────────────┘  │
-│         │                                                   │
-│  ┌──────┴───────┐   ┌──────────────────┐                   │
-│  │ todoCountAtom│   │completedCountAtom│  (derived)        │
-│  └──────────────┘   └──────────────────┘                   │
-└─────────────────────────────────────────────────────────────┘
-         ▲                     ▲
-         │                     │
-   useTodoSync           useLeaderElection
-         │                     │
-         └──────────┬──────────┘
-                    │
-              Index.jsx (page)
+┌─────────────────────────────────────────────────────────────────────┐
+│                         STATE SOURCES                                │
+│                                                                      │
+│  ┌─────────────────────────────┐  ┌──────────────────────────────┐  │
+│  │        INERTIA              │  │          JOTAI               │  │
+│  │   (Server Data)             │  │    (Client-Only State)       │  │
+│  │                             │  │                              │  │
+│  │  usePage().props.todos      │  │  isLeaderAtom                │  │
+│  │                             │  │  logsAtom                    │  │
+│  └─────────────┬───────────────┘  └──────────────┬───────────────┘  │
+│                │                                  │                  │
+│                └──────────────┬───────────────────┘                  │
+│                               │                                      │
+│                       useTodoActions()                               │
+│                               │                                      │
+│            ┌──────────────────┼──────────────────┐                   │
+│            │                  │                  │                   │
+│            ▼                  ▼                  ▼                   │
+│     router.post()    useLeaderElection()   useLogWriter()           │
+│     router.patch()        │                     │                   │
+│     router.delete()       │                     │                   │
+│     router.replace()      │                     │                   │
+│            │              │                     │                   │
+│            └──────────────┼─────────────────────┘                   │
+│                           │                                          │
+│                     Index.jsx (page)                                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Quick Start
 
-### Using the Sync Hook
+### Using the Todo Actions Hook
 
 ```javascript
-import { useTodoSync } from '../hooks/useTodoSync'
+import { useTodoActions } from '../hooks/useTodoActions'
 
-export default function MyPage({ todos: initialTodos }) {
-  const { todos, isLeader } = useTodoSync(initialTodos)
-  
-  // todos: reactive array, auto-updates from WebSocket
-  // isLeader: true if this tab maintains the WebSocket connection
+export default function MyPage() {
+  const { 
+    todos,          // Array from usePage().props, auto-updates via Inertia
+    todoCount,      // Derived count
+    completedCount, // Derived count
+    isLeader,       // True if this tab maintains the WebSocket connection
+    createTodo,     // Action: router.post('/todos', ...)
+    toggleTodo,     // Action: router.patch('/todos/:id', ...)
+    deleteTodo,     // Action: router.delete('/todos/:id')
+  } = useTodoActions()
   
   return (
-    <ul>
-      {todos.map(todo => <li key={todo.id}>{todo.title}</li>)}
-    </ul>
+    <div>
+      <p>{completedCount} of {todoCount} completed</p>
+      <button onClick={() => createTodo('New task')}>Add</button>
+      <ul>
+        {todos.map(todo => (
+          <li key={todo.id}>
+            <input 
+              type="checkbox" 
+              checked={todo.completed} 
+              onChange={() => toggleTodo(todo)} 
+            />
+            {todo.title}
+            <button onClick={() => deleteTodo(todo.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
+}
+```
+
+### Using the Event Log Hook
+
+```javascript
+import { useEventLog, useLogWriter } from '../hooks/useEventLog'
+
+// Full hook (for components that display logs)
+function LogViewer() {
+  const { logs, addLog, clearLogs } = useEventLog()
+  return (
+    <div>
+      <button onClick={clearLogs}>Clear</button>
+      {logs.map(log => <p key={log.id}>{log.message}</p>)}
+    </div>
+  )
+}
+
+// Lightweight hook (for components that only write logs)
+function SomeComponent() {
+  const addLog = useLogWriter()
+  
+  const handleAction = () => {
+    addLog('action', 'User clicked button')
+  }
+  
+  return <button onClick={handleAction}>Click me</button>
 }
 ```
 
@@ -969,18 +1222,4 @@ export default function MyPage({ todos: initialTodos }) {
 ```ruby
 # In any controller or service
 BroadcastTodosJob.perform_later
-```
-
-### Accessing Derived State
-
-```javascript
-import { useAtom } from 'jotai'
-import { todoCountAtom, completedCountAtom } from '../atoms/todos'
-
-function Stats() {
-  const [total] = useAtom(todoCountAtom)
-  const [completed] = useAtom(completedCountAtom)
-  
-  return <p>{completed} of {total} completed</p>
-}
 ```

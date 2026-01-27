@@ -1,11 +1,9 @@
 import { useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
-import { logsAtom, clearLogsAtom } from '../atoms/logs'
+import { useEventLog } from '../hooks/useEventLog'
 import './EventLog.css'
 
 export function EventLog() {
-  const [logs] = useAtom(logsAtom)
-  const clearLogs = useSetAtom(clearLogsAtom)
+  const { logs, clearLogs } = useEventLog()
   const [isCollapsed, setIsCollapsed] = useState(false)
 
   if (isCollapsed) {
@@ -23,7 +21,7 @@ export function EventLog() {
       <div className="event-log__header">
         <span className="event-log__title">Event Log</span>
         <div className="event-log__buttons">
-          <button onClick={clearLogs} className="event-log__btn">Clear</button>
+          <button onClick={() => clearLogs()} className="event-log__btn">Clear</button>
           <button onClick={() => setIsCollapsed(true)} className="event-log__btn">Hide</button>
         </div>
       </div>
