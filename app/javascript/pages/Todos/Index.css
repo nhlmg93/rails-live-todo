@@ -1,0 +1,193 @@
+/* Clean, minimal design */
+:root {
+  --bg: #fafafa;
+  --bg-card: #ffffff;
+  --text: #1a1a1a;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+  --border: #e5e5e5;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --success: #16a34a;
+  --danger: #dc2626;
+}
+
+body {
+  background: var(--bg);
+  min-height: 100vh;
+  margin: 0;
+}
+
+.todos-container {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 48px 20px 200px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.todos-title {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin: 0 0 1.5rem;
+  color: var(--text);
+}
+
+.todos-stats {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.todos-stat {
+  display: flex;
+  gap: 6px;
+}
+
+.todos-stat__value {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.todos-stat__label {
+  color: var(--text-muted);
+}
+
+.todos-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.todos-input {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 0.9375rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  color: var(--text);
+}
+
+.todos-input::placeholder {
+  color: var(--text-muted);
+}
+
+.todos-input:focus {
+  border-color: var(--accent);
+}
+
+.todos-add-button {
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.todos-add-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.todos-add-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.todos-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.todos-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.todos-item:last-child {
+  border-bottom: none;
+}
+
+.todos-label {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  cursor: pointer;
+  gap: 12px;
+}
+
+.todos-checkbox {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.todos-checkbox:hover {
+  border-color: var(--accent);
+}
+
+.todos-checkbox:checked {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.todos-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.todos-text {
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+
+.todos-text--completed {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.todos-delete-button {
+  padding: 4px 8px;
+  font-size: 1.25rem;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  line-height: 1;
+}
+
+.todos-item:hover .todos-delete-button {
+  opacity: 1;
+}
+
+.todos-delete-button:hover {
+  color: var(--danger);
+}
+
+.todos-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 3rem 1rem;
+  font-size: 0.9375rem;
+}

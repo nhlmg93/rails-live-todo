@@ -1,0 +1,45 @@
+.leader-badge {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  color: white;
+  z-index: 9999;
+}
+
+.leader-badge--leader {
+  background: #16a34a;
+}
+
+.leader-badge--follower {
+  background: #2563eb;
+}
+
+.leader-badge__icon {
+  font-size: 12px;
+}
+
+.leader-badge__text {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.leader-badge__pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

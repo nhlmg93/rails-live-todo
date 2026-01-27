@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+
+# Start Vite dev server in background
+bin/vite dev &
+VITE_PID=$!
+
+# Cleanup on exit
+trap "kill $VITE_PID 2>/dev/null" EXIT
+
+# Start Puma server
+exec bundle exec rails server
