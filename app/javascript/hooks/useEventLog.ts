@@ -1,11 +1,12 @@
 import { useCallback } from 'react'
 import { useAtom, useSetAtom } from 'jotai'
 import { atom } from 'jotai'
+import type { LogEntry, LogCategory } from '../types'
 
 const MAX_LOGS = 50
 
 // Core logs atom
-export const logsAtom = atom([])
+export const logsAtom = atom<LogEntry[]>([])
 
 // Derived atom for log count
 export const logCountAtom = atom((get) => get(logsAtom).length)
@@ -17,8 +18,8 @@ export const logCountAtom = atom((get) => get(logsAtom).length)
 export function useEventLog() {
   const [logs, setLogs] = useAtom(logsAtom)
 
-  const addLog = useCallback((category, message) => {
-    const entry = {
+  const addLog = useCallback((category: LogCategory, message: string) => {
+    const entry: LogEntry = {
       id: Date.now() + Math.random(),
       time: new Date().toLocaleTimeString('en-US', {
         hour12: false,
@@ -26,7 +27,7 @@ export function useEventLog() {
         minute: '2-digit',
         second: '2-digit',
         fractionalSecondDigits: 3,
-      }),
+      } as Intl.DateTimeFormatOptions),
       category,
       message,
     }
@@ -47,8 +48,8 @@ export function useEventLog() {
 export function useLogWriter() {
   const setLogs = useSetAtom(logsAtom)
 
-  const addLog = useCallback((category, message) => {
-    const entry = {
+  const addLog = useCallback((category: LogCategory, message: string) => {
+    const entry: LogEntry = {
       id: Date.now() + Math.random(),
       time: new Date().toLocaleTimeString('en-US', {
         hour12: false,
@@ -56,7 +57,7 @@ export function useLogWriter() {
         minute: '2-digit',
         second: '2-digit',
         fractionalSecondDigits: 3,
-      }),
+      } as Intl.DateTimeFormatOptions),
       category,
       message,
     }

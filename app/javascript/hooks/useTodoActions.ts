@@ -5,16 +5,22 @@ import consumer from '../channels/consumer'
 import { useLeaderElection } from './useLeaderElection'
 import { isLeaderAtom } from '../atoms/todos'
 import { useLogWriter } from './useEventLog'
+import type { Todo, PageProps } from '../types'
+import type { Subscription } from '@rails/actioncable'
 
 /**
  * Update Inertia page props with new todos (used by ActionCable and BroadcastChannel)
  */
-const updateTodos = (todos) => {
+const updateTodos = (todos: Todo[]) => {
   router.replace({
     preserveScroll: true,
     preserveState: true,
     props: (current) => ({ ...current, todos }),
   })
+}
+
+interface CableData {
+  todos?: Todo[]
 }
 
 /**
@@ -23,10 +29,10 @@ const updateTodos = (todos) => {
  * and provides CRUD actions via Inertia router.
  */
 export function useTodoActions() {
-  const { todos } = usePage().props
+  const { todos } = usePage<PageProps>().props
   const [isLeader] = useAtom(isLeaderAtom)
   const addLog = useLogWriter()
-  const subscriptionRef = useRef(null)
+  const subscriptionRef = useRef<Subscription | null>(null)
 
   // Derived counts
   const todoCount = useMemo(() => todos?.length ?? 0, [todos])
@@ -36,7 +42,7 @@ export function useTodoActions() {
   )
 
   const { broadcast } = useLeaderElection('todos-sync', {
-    onMessage: useCallback((data) => updateTodos(data), []),
+    onMessage: useCallback((data: Todo[]) => updateTodos(data), []),
   })
 
   // Effect Events for ActionCable callbacks (non-reactive)
@@ -48,7 +54,7 @@ export function useTodoActions() {
     addLog('cable', 'Disconnected from TodosChannel')
   })
 
-  const onReceived = useEffectEvent((data) => {
+  const onReceived = useEffectEvent((data: CableData) => {
     if (data.todos) {
       addLog('cable', `Received ${data.todos.length} todos`)
       updateTodos(data.todos)
@@ -71,33 +77,15 @@ export function useTodoActions() {
       received: onReceived,
     })
 
-    return () => subscriptionRef.current?.unsubscribe()
+    return () => {
+      subscriptionRef.current?.unsubscribe()
+    }
   }, [isLeader])
-
-  // Action creators - use Inertia router directly
-  const createTodo = useCallback((title) => {
-    router.post('/todos', { todo: { title: title.trim() } }, { preserveScroll: true })
-  }, [])
-
-  const toggleTodo = useCallback((todo) => {
-    router.patch(
-      `/todos/${todo.id}`,
-      { todo: { completed: !todo.completed } },
-      { preserveScroll: true }
-    )
-  }, [])
-
-  const deleteTodo = useCallback((todoId) => {
-    router.delete(`/todos/${todoId}`, { preserveScroll: true })
-  }, [])
 
   return {
     todos: todos ?? [],
     todoCount,
     completedCount,
     isLeader,
-    createTodo,
-    toggleTodo,
-    deleteTodo,
   }
 }

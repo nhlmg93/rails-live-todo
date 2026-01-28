@@ -1,4 +1,8 @@
-export default function Home({ name }) {
+interface HomeProps {
+  name: string
+}
+
+export default function Home({ name }: HomeProps) {
   return (
     <div className="container">
       <h1>Welcome to Mirs V2</h1>
