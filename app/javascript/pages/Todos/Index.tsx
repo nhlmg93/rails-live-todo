@@ -1,39 +1,11 @@
-import { FormEvent } from "react";
-import { useForm, router } from "@inertiajs/react";
+import { Form } from "@inertiajs/react";
 import { useTodoActions } from "../../hooks/useTodoActions";
 import { EventLog } from "../../components/EventLog";
 import { LeaderBadge } from "../../components/LeaderBadge";
-import type { Todo } from "../../types";
 import "./Index.css";
 
 export default function Index() {
-  const { todos, todoCount, completedCount } = useTodoActions();
-
-  const { data, setData, post, processing, reset } = useForm({
-    todo: { title: "" },
-  });
-
-  const handleCreate = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!data.todo.title.trim()) return;
-
-    post("/todos", {
-      preserveScroll: true,
-      onSuccess: () => reset(),
-    });
-  };
-
-  const handleToggle = (todo: Todo) => {
-    router.patch(
-      `/todos/${todo.id}`,
-      { todo: { completed: !todo.completed } },
-      { preserveScroll: true }
-    );
-  };
-
-  const handleDelete = (todoId: number) => {
-    router.delete(`/todos/${todoId}`, { preserveScroll: true });
-  };
+  const { todos, todoCount, completedCount, toggleTodo, deleteTodo } = useTodoActions();
 
   return (
     <div className="todos-container">
@@ -58,23 +30,23 @@ export default function Index() {
         </div>
       </div>
 
-      <form onSubmit={handleCreate} className="todos-form">
+      <Form
+        action="/todos"
+        method="post"
+        className="todos-form"
+        resetOnSuccess
+        options={{ preserveScroll: true }}
+      >
         <input
           type="text"
-          value={data.todo.title}
-          onChange={(e) => setData("todo", { title: e.target.value })}
+          name="todo[title]"
           placeholder="What needs to be done?"
           className="todos-input"
-          disabled={processing}
         />
-        <button
-          type="submit"
-          className="todos-add-button"
-          disabled={processing}
-        >
+        <button type="submit" className="todos-add-button">
           Add
         </button>
-      </form>
+      </Form>
 
       <ul className="todos-list">
         {todos.map((todo) => (
@@ -83,7 +55,7 @@ export default function Index() {
               <input
                 type="checkbox"
                 checked={todo.completed}
-                onChange={() => handleToggle(todo)}
+                onChange={() => toggleTodo(todo)}
                 className="todos-checkbox"
               />
               <span
@@ -93,7 +65,7 @@ export default function Index() {
               </span>
             </label>
             <button
-              onClick={() => handleDelete(todo.id)}
+              onClick={() => deleteTodo(todo.id)}
               className="todos-delete-button"
               aria-label="Delete todo"
             >
