@@ -21,6 +21,7 @@ A real-time collaborative Todo application built with Rails 8.1 and React 19, fe
 
 ### Frontend
 - React 19
+- TypeScript
 - Inertia.js (routing, mutations, state)
 - Jotai (client-side state only: leader election, event log)
 - Vite (build tooling)
@@ -217,21 +218,22 @@ Inertia (server data)              Jotai (client-only)
 
 ```
 app/javascript/
-├── atoms/          # Jotai atoms (isLeader, eventLog - client-only)
+├── atoms/          # Jotai atoms (isLeader - client-only)
 ├── channels/       # ActionCable consumer
 ├── components/     # React components (EventLog, LeaderBadge)
 ├── entrypoints/    # Vite entry points
 ├── hooks/          # Custom React hooks
-│   ├── useTodoActions.js    # Todo state + sync via Inertia
-│   ├── useLeaderElection.js # Tab leader election
-│   └── useEventLog.js       # Event logging utilities
-└── pages/          # Inertia pages
+│   ├── useTodoActions.ts    # Todo state + sync via Inertia
+│   ├── useLeaderElection.ts # Tab leader election
+│   └── useEventLog.ts       # Event logging utilities
+├── pages/          # Inertia pages
+└── types/          # TypeScript interfaces
 ```
 
 **Key Hooks:**
-- `useTodoActions.js` - Todo state via `usePage()`, mutations via `router`, real-time sync via ActionCable
-- `useLeaderElection.js` - Leader election across tabs via BroadcastChannel
-- `useEventLog.js` - Event logging with `useEventLog()` and `useLogWriter()` hooks
+- `useTodoActions.ts` - Todo state via `usePage()`, mutations via `router`, real-time sync via ActionCable
+- `useLeaderElection.ts` - Leader election across tabs via BroadcastChannel
+- `useEventLog.ts` - Event logging with `useEventLog()` and `useLogWriter()` hooks
 
 ## CI/CD
 
